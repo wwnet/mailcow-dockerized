@@ -338,6 +338,7 @@ services:
         - TZ=${TZ}
         - IPV4_NETWORK=${IPV4_NETWORK:-172.22.1}
         - SNAT_TO_SOURCE=${SNAT_TO_SOURCE:-n}
+        - XTABLES_LIBDIR=/usr/lib/xtables
       network_mode: "host"
       dns:
         - ${IPV4_NETWORK:-172.22.1}.254
