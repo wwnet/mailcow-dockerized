@@ -48,7 +48,10 @@ CONFIG_ARRAY=(
   "LOG_LINES"
   "SNAT_TO_SOURCE"
   "SYSCTL_IPV6_DISABLED"
+  "COMPOSE_PROJECT_NAME"
   "SQL_PORT"
+  "API_KEY"
+  "API_ALLOW_FROM"
 )
 
 sed -i '$a\' mailcow.conf
@@ -105,6 +108,18 @@ for option in ${CONFIG_ARRAY[@]}; do
       echo "Adding new option \"${option}\" to mailcow.conf"
       echo '# Bind SQL to 127.0.0.1 on port 13306' >> mailcow.conf
       echo "SQL_PORT=127.0.0.1:13306" >> mailcow.conf
+    fi
+  elif [[ ${option} == "API_KEY" ]]; then
+    if ! grep -q ${option} mailcow.conf; then
+      echo "Adding new option \"${option}\" to mailcow.conf"
+      echo '# Create or override API key for web UI' >> mailcow.conf
+      echo "#API_KEY=" >> mailcow.conf
+    fi
+  elif [[ ${option} == "API_ALLOW_FROM" ]]; then
+    if ! grep -q ${option} mailcow.conf; then
+      echo "Adding new option \"${option}\" to mailcow.conf"
+      echo '# Must be set for API_KEY to be active' >> mailcow.conf
+      echo "#API_ALLOW_FROM=" >> mailcow.conf
     fi
   elif [[ ${option} == "SNAT_TO_SOURCE" ]]; then
     if ! grep -q ${option} mailcow.conf; then
@@ -193,15 +208,22 @@ if [[ ! -z $(which pip) && $(pip list --local | grep -c docker-compose) == 1 ]];
   #prevent breaking a working docker-compose installed with pip
 elif [[ $(curl -sL -w "%{http_code}" https://www.servercow.de/docker-compose/latest.php -o /dev/null) == "200" ]]; then
   LATEST_COMPOSE=$(curl -#L https://www.servercow.de/docker-compose/latest.php)
-  curl -#L https://github.com/docker/compose/releases/download/${LATEST_COMPOSE}/docker-compose-$(uname -s)-$(uname -m) > $(which docker-compose)
-  chmod +x $(which docker-compose)
+  COMPOSE_VERSION=$(docker-compose version --short)
+  if [[ "$LATEST_COMPOSE" != "$COMPOSE_VERSION" ]]; then
+    if [[ -w $(which docker-compose) ]]; then
+      curl -#L https://github.com/docker/compose/releases/download/${LATEST_COMPOSE}/docker-compose-$(uname -s)-$(uname -m) > $(which docker-compose)
+      chmod +x $(which docker-compose)
+    else
+      echo -e "\e[33mWARNING: $(which docker-compose) is not writable, but new version $LATEST_COMPOSE is available (installed: $COMPOSE_VERSION)\e[0m"
+    fi
+  fi
 else
   echo -e "\e[33mCannot determine latest docker-compose version, skipping...\e[0m"
 fi
 
 echo -e "\e[32mFetching new images, if any...\e[0m"
 sleep 2
-docker-compose pull --parallel
+docker-compose pull
 
 # Fix missing SSL, does not overwrite existing files
 [[ ! -d data/assets/ssl ]] && mkdir -p data/assets/ssl
@@ -210,6 +232,17 @@ cp -n data/assets/ssl-example/*.pem data/assets/ssl/
 echo -e "Fixing project name... "
 sed -i 's#COMPOSEPROJECT_NAME#COMPOSE_PROJECT_NAME#g' mailcow.conf
 sed -i '/COMPOSE_PROJECT_NAME=/s/-//g' mailcow.conf
+
+echo -e "Fixing PHP-FPM worker ports for Nginx sites..."
+sed -i 's#phpfpm:9000#phpfpm:9002#g' data/conf/nginx/*.conf
+if ls data/conf/nginx/*.custom 1> /dev/null 2>&1; then
+  sed -i 's#phpfpm:9000#phpfpm:9002#g' data/conf/nginx/*.custom
+fi
+
+if [[ -f "data/web/nextcloud/occ" ]]; then
+echo "Setting Nextcloud Redis timeout to 0.0..."
+docker exec -it -u www-data $(docker ps -f name=php-fpm-mailcow -q) bash -c "/web/nextcloud/occ config:system:set redis timeout --value=0.0 --type=integer"
+fi
 
 echo -e "\e[32mStarting mailcow...\e[0m"
 sleep 2
